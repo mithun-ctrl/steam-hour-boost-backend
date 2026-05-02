@@ -1,5 +1,6 @@
 import SteamUser from 'steam-user';
 import SteamTotp from 'steam-totp';
+import { LoginSession, EAuthTokenPlatformType } from 'steam-session';
 import Account from '../models/account.model.js';
 import { decrypt } from '../utils/encryption.js';
 import logger from '../utils/logger.js';
@@ -44,60 +45,103 @@ const startSession = async (account, io) => {
   emitStatus(io, accountId, 'connecting');
   logger.info(`Connecting Steam account: ${account.username}`);
 
-  const logOnOptions = { accountName: account.username, password };
-  if (sharedSecret) {
+  const attachClientHandlers = () => {
+    client.on('loggedOn', async () => {
+      logger.info(`Steam account online: ${account.username}`);
+      client.setPersona(SteamUser.EPersonaState.Online);
+
+      if (account.gameIds && account.gameIds.length > 0) {
+        client.gamesPlayed(account.gameIds);
+        logger.info(`Games set for ${account.username}: [${account.gameIds.join(', ')}]`);
+      }
+
+      const sess = sessions.get(accountId);
+      if (sess) sess.retryCount = 0;
+
+      await updateAccountStatus(accountId, 'online');
+      emitStatus(io, accountId, 'online', { gameIds: account.gameIds });
+    });
+
+    client.on('error', async (err) => {
+      logger.error(`Steam error for ${account.username}: ${err.message}`);
+      sessions.delete(accountId);
+
+      await updateAccountStatus(accountId, 'error', err.message);
+      emitStatus(io, accountId, 'error', { error: err.message });
+
+      // Attempt reconnect with exponential back-off
+      scheduleReconnect(account, io);
+    });
+
+    client.on('disconnected', async (eresult, msg) => {
+      logger.warn(`Steam disconnected for ${account.username}: ${msg}`);
+      sessions.delete(accountId);
+
+      await updateAccountStatus(accountId, 'offline');
+      emitStatus(io, accountId, 'offline');
+
+      scheduleReconnect(account, io);
+    });
+
+    client.on('steamGuard', (domain, callback) => {
+      if (sharedSecret) {
+        const code = SteamTotp.generateAuthCode(sharedSecret);
+        logger.info(`Steam Guard 2FA generated for ${account.username}`);
+        callback(code);
+      } else {
+        logger.error(`Steam Guard required for ${account.username} but no shared secret set`);
+        emitStatus(io, accountId, 'error', { error: 'Steam Guard required – add shared secret or approve on mobile' });
+      }
+    });
+  };
+
+  attachClientHandlers();
+
+  if (!sharedSecret) {
+    // If no shared secret, use steam-session to allow mobile confirmation polling
+    try {
+      const session = new LoginSession(EAuthTokenPlatformType.SteamClient);
+
+      session.on('authenticated', async () => {
+        logger.info(`Session authenticated via mobile confirmation for ${account.username}`);
+        client.logOn({ refreshToken: session.refreshToken });
+      });
+
+      session.on('timeout', () => {
+        logger.error(`Login session timeout for ${account.username}`);
+        sessions.delete(accountId);
+        updateAccountStatus(accountId, 'error', 'Login timeout (did you approve?)');
+        emitStatus(io, accountId, 'error', { error: 'Login timeout (did you approve?)' });
+      });
+
+      session.on('error', (err) => {
+        logger.error(`Login session error for ${account.username}: ${err.message}`);
+        sessions.delete(accountId);
+        updateAccountStatus(accountId, 'error', err.message);
+        emitStatus(io, accountId, 'error', { error: err.message });
+      });
+
+      const startResult = await session.startWithCredentials({
+        accountName: account.username,
+        password: password,
+      });
+
+      if (startResult.actionRequired) {
+        logger.info(`Waiting for mobile confirmation for ${account.username}`);
+        emitStatus(io, accountId, 'connecting', { info: 'Please approve on Steam Mobile App' });
+      }
+    } catch (err) {
+      logger.error(`Failed to start login session for ${account.username}: ${err.message}`);
+      sessions.delete(accountId);
+      updateAccountStatus(accountId, 'error', err.message);
+      emitStatus(io, accountId, 'error', { error: err.message });
+    }
+  } else {
+    // Standard login flow when shared secret is available
+    const logOnOptions = { accountName: account.username, password };
     logOnOptions.twoFactorCode = SteamTotp.generateAuthCode(sharedSecret);
+    client.logOn(logOnOptions);
   }
-
-  client.logOn(logOnOptions);
-
-  client.on('loggedOn', async () => {
-    logger.info(`Steam account online: ${account.username}`);
-    client.setPersona(SteamUser.EPersonaState.Online);
-
-    if (account.gameIds && account.gameIds.length > 0) {
-      client.gamesPlayed(account.gameIds);
-      logger.info(`Games set for ${account.username}: [${account.gameIds.join(', ')}]`);
-    }
-
-    const sess = sessions.get(accountId);
-    if (sess) sess.retryCount = 0;
-
-    await updateAccountStatus(accountId, 'online');
-    emitStatus(io, accountId, 'online', { gameIds: account.gameIds });
-  });
-
-  client.on('error', async (err) => {
-    logger.error(`Steam error for ${account.username}: ${err.message}`);
-    sessions.delete(accountId);
-
-    await updateAccountStatus(accountId, 'error', err.message);
-    emitStatus(io, accountId, 'error', { error: err.message });
-
-    // Attempt reconnect with exponential back-off
-    scheduleReconnect(account, io);
-  });
-
-  client.on('disconnected', async (eresult, msg) => {
-    logger.warn(`Steam disconnected for ${account.username}: ${msg}`);
-    sessions.delete(accountId);
-
-    await updateAccountStatus(accountId, 'offline');
-    emitStatus(io, accountId, 'offline');
-
-    scheduleReconnect(account, io);
-  });
-
-  client.on('steamGuard', (domain, callback) => {
-    if (sharedSecret) {
-      const code = SteamTotp.generateAuthCode(sharedSecret);
-      logger.info(`Steam Guard 2FA generated for ${account.username}`);
-      callback(code);
-    } else {
-      logger.error(`Steam Guard required for ${account.username} but no shared secret set`);
-      emitStatus(io, accountId, 'error', { error: 'Steam Guard required – add shared secret' });
-    }
-  });
 };
 
 const scheduleReconnect = (account, io) => {

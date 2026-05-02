@@ -8,6 +8,7 @@ import logger from './utils/logger.js';
 import authRoutes from './routes/auth.routes.js';
 import accountRoutes from './routes/account.routes.js';
 import sessionRoutes from './routes/session.routes.js';
+import gamesRoutes from './routes/games.routes.js';
 import { initSocketService } from './services/socket.service.js';
 
 dotenv.config();
@@ -17,7 +18,7 @@ const httpServer = http.createServer(app);
 
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.FRONTEND_URL || 'https://steam-hourboost-client.vercel.app',
+    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
     methods: ['GET', 'POST'],
     credentials: true,
   },
@@ -28,7 +29,7 @@ connectDB();
 
 // Middleware
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'https://steam-hourboost-client.vercel.app',
+  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
   credentials: true,
 }));
 app.use(express.json());
@@ -43,6 +44,7 @@ app.use((req, _res, next) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/accounts', accountRoutes);
 app.use('/api/sessions', sessionRoutes);
+app.use('/api/games', gamesRoutes);
 
 // Health check
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
