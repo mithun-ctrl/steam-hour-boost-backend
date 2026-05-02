@@ -16,20 +16,22 @@ dotenv.config();
 const app = express();
 const httpServer = http.createServer(app);
 
+const allowedOriginsUrl = [
+  'http://localhost:5173',
+  process.env.FRONTEND_URL,
+];
+
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.FRONTEND_URL || 'https://steam-hourboost-client.vercel.app',
+    origin: allowedOriginsUrl,
     methods: ['GET', 'POST'],
     credentials: true,
   },
 });
 
-// Connect to MongoDB
 connectDB();
-
-// Middleware
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'https://steam-hourboost-client.vercel.app',
+  origin: allowedOriginsUrl,
   credentials: true,
 }));
 app.use(express.json());
