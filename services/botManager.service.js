@@ -64,6 +64,9 @@ const startSession = async (account, io) => {
 
     client.on('error', async (err) => {
       logger.error(`Steam error for ${account.username}: ${err.message}`);
+      const sess = sessions.get(accountId);
+      if (!sess || sess.intentionalStop) return;
+
       sessions.delete(accountId);
 
       await updateAccountStatus(accountId, 'error', err.message);
@@ -75,6 +78,9 @@ const startSession = async (account, io) => {
 
     client.on('disconnected', async (eresult, msg) => {
       logger.warn(`Steam disconnected for ${account.username}: ${msg}`);
+      const sess = sessions.get(accountId);
+      if (!sess || sess.intentionalStop) return;
+
       sessions.delete(accountId);
 
       await updateAccountStatus(accountId, 'offline');
@@ -173,8 +179,11 @@ const stopSession = async (accountId, io) => {
 
   if (sess.retryTimer) clearTimeout(sess.retryTimer);
 
+  sess.intentionalStop = true;
+
   if (sess.client) {
     try {
+      sess.client.gamesPlayed([]);
       sess.client.logOff();
     } catch (_) { /* already disconnected */ }
   }
