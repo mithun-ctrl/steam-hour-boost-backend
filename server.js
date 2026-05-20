@@ -56,7 +56,7 @@ initSocketService(io);
 
 const PORT = process.env.PORT || 5000;
 httpServer.listen(PORT, () => {
-  logger.info(`Server running on port ${PORT}`);
+  logger.info(`Health check server is running on port ${PORT}`);
 });
 
 export { io };
